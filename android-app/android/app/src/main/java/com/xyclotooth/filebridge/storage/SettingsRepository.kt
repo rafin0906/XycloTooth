@@ -21,7 +21,7 @@ class SettingsRepository(context: Context) {
     }
 
     var serverUrl: String
-        get() = prefs.getString(KEY_SERVER_URL, "http://10.0.2.2:3000") ?: "http://10.0.2.2:3000"
+        get() = prefs.getString(KEY_SERVER_URL, "https://xyclotooth-server.onrender.com") ?: "https://xyclotooth-server.onrender.com"
         set(value) = prefs.edit().putString(KEY_SERVER_URL, value).apply()
 
     var apiToken: String
