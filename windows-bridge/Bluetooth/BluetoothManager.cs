@@ -159,7 +159,7 @@ public class BluetoothManager
         {
             try
             {
-                var client = await _listener.AcceptBluetoothClientAsync();
+                var client = await Task.Run(() => _listener.AcceptBluetoothClient(), ct);
                 AppLogger.Instance.Info($"Accepted Bluetooth connection from: {client.RemoteMachineName}");
 
                 lock (_connectionLock)
