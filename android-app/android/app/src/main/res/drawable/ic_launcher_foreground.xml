@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:scaleX="0.85"
+        android:scaleY="0.85"
+        android:pivotX="54"
+        android:pivotY="54">
+        <!-- Center Bluetooth Rune Path -->
+        <path
+            android:fillColor="#00000000"
+            android:strokeColor="#38BDF8"
+            android:strokeWidth="4.5"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round"
+            android:pathData="M54,26 L54,82 L69,68 L41,44 L69,40 L54,26" />
+        
+        <!-- Left Data Sync Arrow Arc -->
+        <path
+            android:fillColor="#00000000"
+            android:strokeColor="#818CF8"
+            android:strokeWidth="3.5"
+            android:strokeLineCap="round"
+            android:pathData="M33,40 A22,22 0 0,0 33,68" />
+        <path
+            android:fillColor="#818CF8"
+            android:pathData="M30,37 L38,40 L34,45 Z" />
+
+        <!-- Right Data Sync Arrow Arc -->
+        <path
+            android:fillColor="#00000000"
+            android:strokeColor="#818CF8"
+            android:strokeWidth="3.5"
+            android:strokeLineCap="round"
+            android:pathData="M75,68 A22,22 0 0,0 75,40" />
+        <path
+            android:fillColor="#818CF8"
+            android:pathData="M78,71 L70,68 L74,63 Z" />
+
+        <!-- Glowing Node Dots -->
+        <path
+            android:fillColor="#22D3EE"
+            android:pathData="M54,26 m-3,0 a3,3 0 1,1 6,0 a3,3 0 1,1 -6,0" />
+        <path
+            android:fillColor="#22D3EE"
+            android:pathData="M54,82 m-3,0 a3,3 0 1,1 6,0 a3,3 0 1,1 -6,0" />
+    </group>
+</vector>
