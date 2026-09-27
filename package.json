@@ -1,0 +1,16 @@
+{
+  "name": "xyclotooth",
+  "version": "1.0.0",
+  "description": "Bluetooth ↔ Android ↔ Server Automated Text File Bridge",
+  "main": "server/server.js",
+  "scripts": {
+    "build": "npm --prefix server install",
+    "start": "node server/server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "multer": "^1.4.5-lts.1",
+    "uuid": "^9.0.1"
+  }
+}

@@ -1,0 +1,18 @@
+# Build and Release Folders
+**/bin/
+**/obj/
+**/dist/
+node_modules/
+.gradle/
+build/
+*.log
+*.exe
+*.apk
+*.pdb
+
+# User-specific files
+.idea/
+.vscode/
+*.user
+*.suo
+dotnet-install.ps1
