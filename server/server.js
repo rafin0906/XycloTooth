@@ -53,6 +53,32 @@ function authenticate(req, res, next) {
   next();
 }
 
+// Automatically load .env if present (for local testing/standalone execution)
+const envFile = path.join(__dirname, '.env');
+if (fs.existsSync(envFile)) {
+  try {
+    const raw = fs.readFileSync(envFile, 'utf8');
+    raw.split(/\r?\n/).forEach(line => {
+      const match = line.trim().match(/^([^#=]+)=(.*)$/);
+      if (match) {
+        const key = match[1].trim();
+        const value = match[2].trim().replace(/^["']|["']$/g, '');
+        if (!process.env[key]) {
+          process.env[key] = value;
+        }
+      }
+    });
+  } catch (e) {
+    console.warn('Could not parse .env file:', e.message);
+  }
+}
+
+// Configuration
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-5.6-sol';
+const GROQ_API_KEY = process.env.GROQ_API_KEY;
+const GROQ_MODEL = process.env.GROQ_MODEL || 'openai/gpt-oss-120b';
+
 // Compute SHA-256 hash of a file
 function computeSha256(filePath) {
   return new Promise((resolve, reject) => {
@@ -64,11 +90,116 @@ function computeSha256(filePath) {
   });
 }
 
+// Call OpenAI LLM
+async function callOpenAILlm(userPrompt, filename) {
+  const apiKey = process.env.OPENAI_API_KEY || OPENAI_API_KEY;
+  const model = process.env.OPENAI_MODEL || OPENAI_MODEL;
+
+  if (!apiKey) {
+    throw new Error('OPENAI_API_KEY is not configured');
+  }
+
+  console.log(`[${new Date().toISOString()}] [LLM] Sending prompt (${userPrompt.length} chars) from "${filename}" to OpenAI (${model})...`);
+
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      model: model,
+      messages: [
+        {
+          role: 'system',
+          content: process.env.LLM_SYSTEM_PROMPT || 
+            'You are an intelligent, helpful, and highly accurate AI assistant. The user has sent text via the XycloTooth Automated Pipeline. Carefully analyze the user prompt/document and provide a direct, comprehensive, and well-structured answer.'
+        },
+        {
+          role: 'user',
+          content: userPrompt
+        }
+      ]
+    })
+  });
+
+  const data = await response.json();
+  if (!response.ok || data.error) {
+    const errorMsg = data.error ? data.error.message : `HTTP ${response.status}: ${response.statusText}`;
+    throw new Error(`OpenAI API error: ${errorMsg}`);
+  }
+
+  if (!data.choices || data.choices.length === 0 || !data.choices[0].message) {
+    throw new Error('OpenAI returned empty completion choices');
+  }
+
+  const answer = data.choices[0].message.content;
+  console.log(`[${new Date().toISOString()}] [LLM] Successfully received answer (${answer.length} chars) from ${model}`);
+  return {
+    answer,
+    model: data.model || model,
+    usage: data.usage
+  };
+}
+
+// Generate LLM answer with fallback
+async function generateLlmAnswer(content, filename) {
+  // 1. Primary: OpenAI (gpt-5.6-sol)
+  try {
+    return await callOpenAILlm(content, filename);
+  } catch (openaiErr) {
+    console.error(`[LLM] OpenAI call failed: ${openaiErr.message}`);
+
+    // 2. Fallback: Groq if configured
+    const groqKey = process.env.GROQ_API_KEY || GROQ_API_KEY;
+    if (groqKey) {
+      try {
+        console.log(`[LLM] Attempting fallback to Groq (${GROQ_MODEL})...`);
+        const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${groqKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            model: process.env.GROQ_MODEL || GROQ_MODEL,
+            messages: [
+              {
+                role: 'system',
+                content: 'You are an intelligent AI assistant. Provide a direct, comprehensive, and accurate answer to the user prompt.'
+              },
+              { role: 'user', content: content }
+            ]
+          })
+        });
+        const groqData = await groqRes.json();
+        if (groqRes.ok && groqData.choices && groqData.choices[0]?.message?.content) {
+          console.log(`[LLM] Groq fallback answered successfully (${groqData.choices[0].message.content.length} chars)`);
+          return {
+            answer: groqData.choices[0].message.content,
+            model: groqData.model || GROQ_MODEL,
+            usage: groqData.usage
+          };
+        }
+      } catch (groqErr) {
+        console.error(`[LLM] Groq fallback error: ${groqErr.message}`);
+      }
+    }
+
+    throw openaiErr;
+  }
+}
+
 // Health check endpoints (compatible with Render, load balancers, and clients)
 app.get(['/', '/healthz', '/api/health'], (req, res) => {
   res.status(200).json({
     status: 'healthy',
     service: 'XycloTooth Automated Text File Bridge Server',
+    llm: {
+      provider: 'OpenAI',
+      model: process.env.OPENAI_MODEL || OPENAI_MODEL,
+      configured: Boolean(process.env.OPENAI_API_KEY || OPENAI_API_KEY)
+    },
     timestamp: new Date().toISOString()
   });
 });
@@ -98,28 +229,23 @@ app.post('/api/upload', authenticate, upload.single('file'), async (req, res) =>
     // Read the uploaded file contents
     const content = fs.readFileSync(uploadedPath, 'utf8');
 
-    // Generate response content
-    const timestamp = new Date().toISOString();
+    // Generate response filename
     const responseFileName = originalName.startsWith('input')
       ? originalName.replace('input', 'response')
       : `response_${originalName}`;
 
-    const responseContent = 
-`========================================
-XYCLOTOOTH BRIDGE RESPONSE
-========================================
-Request ID:    ${requestId}
-Processed At:  ${timestamp}
-Source File:   ${originalName}
-Source SHA256: ${sha256}
-Size (bytes):  ${req.file.size}
-----------------------------------------
-Original Content Preview:
-${content.substring(0, 500)}${content.length > 500 ? '\n...[truncated]' : ''}
-----------------------------------------
-Server Status: PROCESSED_SUCCESSFULLY
-========================================
-`;
+    // Call LLM with user content
+    let responseContent;
+    let modelUsed = process.env.OPENAI_MODEL || OPENAI_MODEL;
+
+    try {
+      const llmResult = await generateLlmAnswer(content, originalName);
+      responseContent = llmResult.answer;
+      modelUsed = llmResult.model;
+    } catch (llmErr) {
+      console.error(`[LLM] Error processing file "${originalName}":`, llmErr);
+      responseContent = `[XycloTooth AI Error]\nFailed to generate AI response for "${originalName}".\nReason: ${llmErr.message}\nTimestamp: ${new Date().toISOString()}\n`;
+    }
 
     // Save response file
     const responseFilePath = path.join(RESPONSE_DIR, `${requestId}_${responseFileName}`);
@@ -140,13 +266,16 @@ Server Status: PROCESSED_SUCCESSFULLY
 
     if (wantsJson) {
       res.setHeader('X-Request-ID', requestId);
+      res.setHeader('X-AI-Model', modelUsed);
       return res.status(200).json({
         success: true,
         requestId,
         filename: responseFileName,
         sha256: responseSha256,
+        model: modelUsed,
         size: Buffer.byteLength(responseContent, 'utf8'),
-        downloadUrl: `/api/download/${requestId}`
+        downloadUrl: `/api/download/${requestId}`,
+        answer: responseContent
       });
     }
 
@@ -155,9 +284,10 @@ Server Status: PROCESSED_SUCCESSFULLY
     res.setHeader('Content-Disposition', `attachment; filename="${responseFileName}"`);
     res.setHeader('X-Request-ID', requestId);
     res.setHeader('X-File-SHA256', responseSha256);
+    res.setHeader('X-AI-Model', modelUsed);
     res.status(200).send(responseContent);
 
-    console.log(`[${new Date().toISOString()}] Response sent for requestId: ${requestId} (${responseFileName})`);
+    console.log(`[${new Date().toISOString()}] Response sent for requestId: ${requestId} (${responseFileName}) using ${modelUsed}`);
   } catch (err) {
     console.error('Error handling upload:', err);
     res.status(500).json({ error: 'Internal server error processing file upload', details: err.message });

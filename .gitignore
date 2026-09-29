@@ -15,4 +15,11 @@ build/
 .vscode/
 *.user
 *.suo
-dotnet-install.ps1
+# Environment files
+.env
+*.env
+.env.*
+
+# Server uploads and generated responses
+server/uploads/
+server/responses/
