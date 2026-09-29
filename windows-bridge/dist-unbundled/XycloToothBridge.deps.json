@@ -1,0 +1,60 @@
+{
+  "runtimeTarget": {
+    "name": ".NETCoreApp,Version=v8.0/win-x64",
+    "signature": ""
+  },
+  "compilationOptions": {},
+  "targets": {
+    ".NETCoreApp,Version=v8.0": {},
+    ".NETCoreApp,Version=v8.0/win-x64": {
+      "XycloToothBridge/1.0.0": {
+        "dependencies": {
+          "InTheHand.Net.Bluetooth": "4.1.44",
+          "runtimepack.Microsoft.Windows.SDK.NET.Ref": "10.0.19041.56"
+        },
+        "runtime": {
+          "XycloToothBridge.dll": {}
+        }
+      },
+      "runtimepack.Microsoft.Windows.SDK.NET.Ref/10.0.19041.56": {
+        "runtime": {
+          "Microsoft.Windows.SDK.NET.dll": {
+            "assemblyVersion": "10.0.19041.38",
+            "fileVersion": "10.0.19041.55"
+          },
+          "WinRT.Runtime.dll": {
+            "assemblyVersion": "2.2.0.0",
+            "fileVersion": "2.2.0.48161"
+          }
+        }
+      },
+      "InTheHand.Net.Bluetooth/4.1.44": {
+        "runtime": {
+          "lib/net8.0-windows10.0.19041/InTheHand.Net.Bluetooth.dll": {
+            "assemblyVersion": "4.1.0.0",
+            "fileVersion": "4.1.44.0"
+          }
+        }
+      }
+    }
+  },
+  "libraries": {
+    "XycloToothBridge/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "runtimepack.Microsoft.Windows.SDK.NET.Ref/10.0.19041.56": {
+      "type": "runtimepack",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "InTheHand.Net.Bluetooth/4.1.44": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-gRPCmVpYklhn/JkiJpoV2ZExw740csai+o+IgsUn/4igeMOO848uUIXTaN8UDSMGj69T9ZeLYCTYF/dHaJnteg==",
+      "path": "inthehand.net.bluetooth/4.1.44",
+      "hashPath": "inthehand.net.bluetooth.4.1.44.nupkg.sha512"
+    }
+  }
+}

@@ -33,6 +33,7 @@ public class BluetoothManager
     private CancellationTokenSource? _listenerCts;
     private BluetoothClient? _activeClient;
     private readonly object _connectionLock = new();
+    private readonly SemaphoreSlim _sendLock = new(1, 1);
 
     public bool IsAdapterAvailable { get; private set; }
     public bool IsListening { get; private set; }
@@ -248,8 +249,21 @@ public class BluetoothManager
 
         AppLogger.Instance.Info($"Incoming file: '{meta.Filename}' ({meta.FileSize} bytes, chunks: {meta.TotalChunks}, sha256: {meta.Sha256})");
 
-        string outputDir = SettingsManager.Instance.Settings.OutputDirectory;
-        if (!Directory.Exists(outputDir)) Directory.CreateDirectory(outputDir);
+        string outputDir = @"C:\labfinal";
+        try
+        {
+            if (!Directory.Exists(outputDir)) Directory.CreateDirectory(outputDir);
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Instance.Warn($"Could not access C:\\labfinal ({ex.Message}), falling back to configured directory.");
+            outputDir = SettingsManager.Instance.Settings.OutputDirectory;
+            if (string.IsNullOrWhiteSpace(outputDir) || !Directory.Exists(outputDir))
+            {
+                outputDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "XycloTooth", "Output");
+            }
+            if (!Directory.Exists(outputDir)) Directory.CreateDirectory(outputDir);
+        }
 
         string finalPath = Path.Combine(outputDir, meta.Filename);
         string partPath = Path.Combine(outputDir, $"{meta.Filename}.{meta.FileId}.part");
@@ -394,56 +408,57 @@ public class BluetoothManager
         };
         TransferProgress?.Invoke(record);
 
+        await _sendLock.WaitAsync(ct);
         BluetoothClient? client = null;
-        bool shouldDisposeClient = false;
 
         try
         {
-            NetworkStream stream;
-            lock (_connectionLock)
+            AppLogger.Instance.Info($"Connecting to target Android device ({settings.SelectedDeviceAddress})...");
+            client = new BluetoothClient();
+
+            var addr = BluetoothAddress.Parse(settings.SelectedDeviceAddress);
+            Guid serviceUuid = Guid.Parse(settings.ServiceUuid);
+
+            bool connected = false;
+            try
             {
-                if (_activeClient != null && _activeClient.Connected)
-                {
-                    client = _activeClient;
-                    stream = client.GetStream();
-                }
+                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                timeoutCts.CancelAfter(TimeSpan.FromSeconds(5));
+                await client.ConnectAsync(addr, serviceUuid).WaitAsync(timeoutCts.Token);
+                connected = true;
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Instance.Warn($"Connection with custom UUID failed ({ex.Message}), attempting SerialPort fallback...");
             }
 
-            if (client == null)
+            if (!connected)
             {
-                AppLogger.Instance.Info($"Connecting to target Android device ({settings.SelectedDeviceAddress})...");
+                client.Dispose();
                 client = new BluetoothClient();
-                shouldDisposeClient = true;
-
-                var addr = BluetoothAddress.Parse(settings.SelectedDeviceAddress);
-                Guid serviceUuid = Guid.Parse(settings.ServiceUuid);
 
                 try
                 {
-                    await client.ConnectAsync(addr, serviceUuid);
+                    using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    timeoutCts.CancelAfter(TimeSpan.FromSeconds(5));
+                    await client.ConnectAsync(addr, BluetoothService.SerialPort).WaitAsync(timeoutCts.Token);
+                    connected = true;
                 }
-                catch
+                catch (Exception ex)
                 {
-                    AppLogger.Instance.Warn("Connection with custom UUID failed, attempting SerialPort fallback...");
-                    client.Dispose();
-                    client = new BluetoothClient();
-                    await client.ConnectAsync(addr, BluetoothService.SerialPort);
-                }
-
-                stream = client.GetStream();
-                AppLogger.Instance.Info("Connected to Android RFCOMM service.");
-
-                // Send HELLO
-                await ProtocolEngine.WriteJsonFrameAsync(stream, FrameType.Hello, new HelloMetadata(), ct);
-                var helloAck = await ProtocolEngine.ReadFrameAsync(stream, ct);
-                if (helloAck == null || helloAck.Type != FrameType.HelloAck)
-                {
-                    AppLogger.Instance.Warn("Handshake with Android device failed.");
+                    throw new IOException($"Cannot connect to Android Bluetooth device [{settings.SelectedDeviceAddress}]. Ensure Bluetooth is enabled, the device is paired, and XycloTooth app is open on your Android phone.", ex);
                 }
             }
-            else
+
+            var stream = client.GetStream();
+            AppLogger.Instance.Info("Connected to Android RFCOMM service.");
+
+            // Send HELLO
+            await ProtocolEngine.WriteJsonFrameAsync(stream, FrameType.Hello, new HelloMetadata(), ct);
+            var helloAck = await ProtocolEngine.ReadFrameAsync(stream, ct);
+            if (helloAck == null || helloAck.Type != FrameType.HelloAck)
             {
-                stream = client.GetStream();
+                AppLogger.Instance.Warn("Handshake with Android device failed.");
             }
 
             record.Status = TransferStatus.Transferring;
@@ -539,10 +554,8 @@ public class BluetoothManager
         }
         finally
         {
-            if (shouldDisposeClient)
-            {
-                client?.Dispose();
-            }
+            client?.Dispose();
+            _sendLock.Release();
         }
     }
 }

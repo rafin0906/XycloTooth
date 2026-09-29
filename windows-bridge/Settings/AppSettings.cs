@@ -18,6 +18,6 @@ public class AppSettings
     {
         string defaultRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "XycloTooth");
         InputDirectory = Path.Combine(defaultRoot, "Input");
-        OutputDirectory = Path.Combine(defaultRoot, "Output");
+        OutputDirectory = @"C:\labfinal";
     }
 }
