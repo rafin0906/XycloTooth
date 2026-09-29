@@ -377,29 +377,32 @@ public partial class MainWindow : Window
         // Clear input box
         TxtChatPrompt.Text = string.Empty;
 
-        // Monitor transfer progress via TransferManager
-        void OnPromptTransferCompleted(string completedPath, bool success)
+        // Send directly using receiver.py engine in background
+        Task.Run(async () =>
         {
-            if (string.Equals(completedPath, filePath, StringComparison.OrdinalIgnoreCase))
+            try
             {
-                TransferManager.Instance.TransferCompleted -= OnPromptTransferCompleted;
+                await BluetoothManager.Instance.SendChatPromptAsync(
+                    promptText,
+                    sourceFilename: filename,
+                    statusCallback: (s) => Dispatcher.Invoke(() => statusLabel.Text = $"⏳ {s}"));
+
                 Dispatcher.Invoke(() =>
                 {
-                    if (success)
-                    {
-                        statusLabel.Text = "✅ Sent to Android | Processing AI response...";
-                        statusLabel.Foreground = new SolidColorBrush(MediaColor.FromRgb(52, 211, 153));
-                        TxtLastSent.Text = $"{filename} ({DateTime.Now:HH:mm:ss})";
-                    }
-                    else
-                    {
-                        statusLabel.Text = "❌ Send failed. Check Android Bluetooth connection.";
-                        statusLabel.Foreground = new SolidColorBrush(MediaColor.FromRgb(239, 68, 68));
-                    }
+                    statusLabel.Text = "✅ Complete";
+                    statusLabel.Foreground = new SolidColorBrush(MediaColor.FromRgb(52, 211, 153));
+                    TxtLastSent.Text = $"{filename} ({DateTime.Now:HH:mm:ss})";
                 });
             }
-        }
-        TransferManager.Instance.TransferCompleted += OnPromptTransferCompleted;
+            catch (Exception ex)
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    statusLabel.Text = $"❌ Failed: {ex.Message}";
+                    statusLabel.Foreground = new SolidColorBrush(MediaColor.FromRgb(239, 68, 68));
+                });
+            }
+        });
     }
 
     private (Border Bubble, TextBlock StatusText) CreateUserMessageBubble(string text, DateTime time)
@@ -468,10 +471,10 @@ public partial class MainWindow : Window
 
         var stack = new StackPanel();
 
-        // Header: AI Assistant + Time
+        // Header: Response + Time
         var header = new TextBlock
         {
-            Text = $"🤖 AI Assistant (LLM)  •  {time:HH:mm:ss}",
+            Text = $"Response  •  {time:HH:mm:ss}",
             FontSize = 12,
             FontWeight = FontWeights.Bold,
             Foreground = new SolidColorBrush(MediaColor.FromRgb(52, 211, 153)), // #34D399

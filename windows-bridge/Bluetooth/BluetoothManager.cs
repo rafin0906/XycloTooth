@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net.Sockets;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using InTheHand.Net;
@@ -373,10 +374,175 @@ public class BluetoothManager
     }
 
     /// <summary>
+    /// Executes a direct chat session with Android using the receiver.py length-prefixed JSON protocol.
+    /// Primary UUID: c91c315b-8c0b-487f-a640-c073e9415d55 (BlueDrop AI)
+    /// </summary>
+    public async Task<string> SendChatPromptAsync(
+        string promptText,
+        string? sourceFilename = null,
+        Action<string>? statusCallback = null,
+        CancellationToken ct = default)
+    {
+        var settings = SettingsManager.Instance.Settings;
+        if (string.IsNullOrWhiteSpace(settings.SelectedDeviceAddress))
+        {
+            throw new InvalidOperationException("No Android Bluetooth device selected in settings.");
+        }
+
+        await _sendLock.WaitAsync(ct);
+        BluetoothClient? client = null;
+
+        try
+        {
+            AppLogger.Instance.Info($"[receiver.py engine] Connecting to Android device ({settings.SelectedDeviceAddress})...");
+            var addr = BluetoothAddress.Parse(settings.SelectedDeviceAddress);
+
+            Guid[] candidateGuids = new[]
+            {
+                BlueDropProtocol.PrimaryServiceUuid,
+                Guid.TryParse(settings.ServiceUuid, out var sG) ? sG : Guid.Empty,
+                BluetoothService.SerialPort
+            }.Where(g => g != Guid.Empty).Distinct().ToArray();
+
+            Stream? stream = null;
+            foreach (var guid in candidateGuids)
+            {
+                try
+                {
+                    client?.Dispose();
+                    client = new BluetoothClient();
+                    using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    timeoutCts.CancelAfter(TimeSpan.FromSeconds(6));
+                    await client.ConnectAsync(addr, guid).WaitAsync(timeoutCts.Token);
+                    stream = client.GetStream();
+                    AppLogger.Instance.Info($"[receiver.py engine] Connected to Android on UUID {guid}.");
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    AppLogger.Instance.Warn($"[receiver.py engine] Connection attempt failed on UUID {guid}: {ex.Message}");
+                }
+            }
+
+            if (stream == null)
+            {
+                throw new IOException($"Could not connect to Android device [{settings.SelectedDeviceAddress}]. Ensure Bluetooth is paired and the bridge app is open.");
+            }
+
+            string requestId = Guid.NewGuid().ToString();
+            var request = new
+            {
+                id = requestId,
+                type = "chat",
+                version = 2,
+                messages = new[]
+                {
+                    new { role = "user", content = promptText }
+                }
+            };
+
+            statusCallback?.Invoke("Sending prompt to Android...");
+            await BlueDropProtocol.SendJsonAsync(stream, request, ct);
+
+            // Read replies loop
+            while (true)
+            {
+                var element = await BlueDropProtocol.ReceiveJsonAsync(stream, ct);
+                if (!element.HasValue)
+                {
+                    throw new EndOfStreamException("Bluetooth connection closed before transfer completed.");
+                }
+
+                var root = element.Value;
+                if (root.TryGetProperty("id", out var idProp) && idProp.GetString() != requestId)
+                {
+                    continue; // Skip mismatched request IDs
+                }
+
+                string type = root.TryGetProperty("type", out var tProp) ? (tProp.GetString() ?? "") : "";
+
+                if (type == "status")
+                {
+                    string status = root.TryGetProperty("status", out var sProp) ? (sProp.GetString() ?? "processing") : "processing";
+                    statusCallback?.Invoke($"AI status: {status}");
+                    continue;
+                }
+
+                if (type == "error")
+                {
+                    string msg = root.TryGetProperty("message", out var mProp) ? (mProp.GetString() ?? "Bridge error") : "Bridge error";
+                    throw new IOException(msg);
+                }
+
+                if (type == "result")
+                {
+                    string answer = root.TryGetProperty("answer", out var aProp) ? (aProp.GetString() ?? "") : "";
+
+                    // Send ACK
+                    try
+                    {
+                        await BlueDropProtocol.SendJsonAsync(stream, new { type = "ack", id = requestId }, ct);
+                    }
+                    catch { }
+
+                    // Save reply to OutputDirectory
+                    string outputDir = settings.OutputDirectory;
+                    if (string.IsNullOrWhiteSpace(outputDir) || !Directory.Exists(outputDir))
+                    {
+                        outputDir = @"C:\labfinal";
+                    }
+                    if (!Directory.Exists(outputDir)) Directory.CreateDirectory(outputDir);
+
+                    string savedFile = Path.Combine(outputDir, $"answer-{requestId}.txt");
+                    await File.WriteAllTextAsync(savedFile, answer, Encoding.UTF8, ct);
+
+                    if (!string.IsNullOrEmpty(sourceFilename))
+                    {
+                        string sourceRespFile = Path.Combine(outputDir, $"response_{sourceFilename}");
+                        await File.WriteAllTextAsync(sourceRespFile, answer, Encoding.UTF8, ct);
+                    }
+
+                    AppLogger.Instance.Info($"[receiver.py engine] AI answer saved to {savedFile}");
+                    FileReceived?.Invoke(savedFile, Path.GetFileName(savedFile));
+                    return answer;
+                }
+            }
+        }
+        finally
+        {
+            try { client?.Dispose(); } catch { }
+            _sendLock.Release();
+        }
+    }
+
+    /// <summary>
     /// Sends a file to the configured Android device over Bluetooth.
-    /// Connects as client if not currently connected.
+    /// Uses receiver.py protocol with fallback to legacy transfer.
     /// </summary>
     public async Task<bool> SendFileToAndroidAsync(string filePath, CancellationToken ct = default)
+    {
+        if (!File.Exists(filePath))
+        {
+            AppLogger.Instance.Error($"Send file failed: File does not exist at {filePath}");
+            return false;
+        }
+
+        string filename = Path.GetFileName(filePath);
+        AppLogger.Instance.Info($"Processing {filename} via receiver.py protocol...");
+        try
+        {
+            string content = await File.ReadAllTextAsync(filePath, Encoding.UTF8, ct);
+            await SendChatPromptAsync(content, sourceFilename: filename, ct: ct);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Instance.Warn($"receiver.py protocol failed ({ex.Message}), trying legacy binary transfer...");
+            return await SendFileLegacyAsync(filePath, ct);
+        }
+    }
+
+    private async Task<bool> SendFileLegacyAsync(string filePath, CancellationToken ct = default)
     {
         if (!File.Exists(filePath))
         {
